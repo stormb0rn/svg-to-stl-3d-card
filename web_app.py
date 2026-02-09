@@ -20,7 +20,7 @@ from shapely.validation import make_valid
 import svgpathtools
 import xml.etree.ElementTree as ET
 
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -150,7 +150,8 @@ def extrude_geometry(geom, z_bottom, z_top):
     return trimesh.util.concatenate(meshes) if meshes else None
 
 
-def convert_svg_to_stl(job_id: str, svg_path: str, stl_path: str):
+def convert_svg_to_stl(job_id: str, svg_path: str, stl_path: str,
+                       target_width=TARGET_WIDTH_MM, base_thick=BASE_THICKNESS_MM, total_h=TOTAL_HEIGHT_MM):
     """Main conversion — runs in a worker thread."""
     try:
         jobs[job_id]["status"] = "processing"
@@ -218,7 +219,7 @@ def convert_svg_to_stl(job_id: str, svg_path: str, stl_path: str):
         cb = all_content.bounds
         cw = cb[2] - cb[0]
         ch = cb[3] - cb[1]
-        scale = TARGET_WIDTH_MM / cw
+        scale = target_width / cw
         h_mm = ch * scale
         margin_svg = CARD_MARGIN_MM / scale
 
@@ -251,10 +252,10 @@ def convert_svg_to_stl(job_id: str, svg_path: str, stl_path: str):
 
         # Build mesh
         all_meshes = []
-        base = extrude_geometry(card_mm, 0, BASE_THICKNESS_MM)
-        if base:
-            all_meshes.append(base)
-        lines = extrude_geometry(lines_mm, BASE_THICKNESS_MM, TOTAL_HEIGHT_MM)
+        base_mesh = extrude_geometry(card_mm, 0, base_thick)
+        if base_mesh:
+            all_meshes.append(base_mesh)
+        lines = extrude_geometry(lines_mm, base_thick, total_h)
         if lines:
             all_meshes.append(lines)
 
@@ -289,8 +290,14 @@ def convert_svg_to_stl(job_id: str, svg_path: str, stl_path: str):
 # ──────────────────────────────────────────────
 
 @app.post("/upload")
-async def upload_svg(files: list[UploadFile] = File(...)):
+async def upload_svg(
+    files: list[UploadFile] = File(...),
+    width: float = Form(default=TARGET_WIDTH_MM),
+    base: float = Form(default=BASE_THICKNESS_MM),
+    lines: float = Form(default=LINE_HEIGHT_MM),
+):
     """Upload one or more SVG files. Returns job IDs for tracking."""
+    total_h = base + lines
     results = []
     for f in files:
         if not f.filename.lower().endswith('.svg'):
@@ -315,8 +322,8 @@ async def upload_svg(files: list[UploadFile] = File(...)):
             "started": time.time(),
         }
 
-        # Submit to thread pool
-        executor.submit(convert_svg_to_stl, job_id, svg_path, stl_path)
+        # Submit to thread pool with user config
+        executor.submit(convert_svg_to_stl, job_id, svg_path, stl_path, width, base, total_h)
         results.append({"filename": f.filename, "job_id": job_id})
 
     return JSONResponse(results)
@@ -425,6 +432,18 @@ HTML_PAGE = """<!DOCTYPE html>
   }
   .download-btn:hover { background: #4a7cde; }
 
+  .preview-container {
+    margin-top: 12px; border-radius: 8px; overflow: hidden;
+    background: #222; position: relative;
+  }
+  .preview-container canvas { display: block; width: 100%; height: 300px; }
+  .preview-btn {
+    display: inline-block; margin-top: 10px; margin-left: 8px; padding: 8px 20px;
+    background: #333; color: #ccc; border: none; border-radius: 8px;
+    font-size: 14px; font-weight: 500; cursor: pointer; transition: background 0.2s;
+  }
+  .preview-btn:hover { background: #444; }
+
   .config { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 24px; }
   .config label { font-size: 13px; color: #888; display: flex; align-items: center; gap: 6px; }
   .config input {
@@ -433,6 +452,9 @@ HTML_PAGE = """<!DOCTYPE html>
   }
   .config span.unit { font-size: 12px; color: #555; }
 </style>
+<script type="importmap">
+{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.162.0/examples/jsm/"}}
+</script>
 </head>
 <body>
 <div class="container">
@@ -455,7 +477,11 @@ HTML_PAGE = """<!DOCTYPE html>
   <div class="job-list" id="jobList"></div>
 </div>
 
-<script>
+<script type="module">
+import * as THREE from 'three';
+import { STLLoader } from 'three/addons/loaders/STLLoader.js';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
 const dropZone = document.getElementById('dropZone');
 const fileInput = document.getElementById('fileInput');
 const jobList = document.getElementById('jobList');
@@ -477,6 +503,9 @@ async function handleFiles(files) {
 
   const formData = new FormData();
   svgFiles.forEach(f => formData.append('files', f));
+  formData.append('width', document.getElementById('cfg-width').value);
+  formData.append('base', document.getElementById('cfg-base').value);
+  formData.append('lines', document.getElementById('cfg-lines').value);
 
   // Create placeholder cards
   svgFiles.forEach(f => {
@@ -552,7 +581,9 @@ async function pollJob(jobId, card) {
         `;
         card.querySelector('.job-actions').innerHTML = `
           <a class="download-btn" href="/download/${jobId}">Download STL</a>
+          <div class="preview-box"></div>
         `;
+        window.__previewSTL(jobId, card.querySelector('.preview-box'));
         activePolls.delete(jobId);
         return;
       }
@@ -571,6 +602,68 @@ async function pollJob(jobId, card) {
   };
   poll();
 }
+
+// STL 3D Preview
+window.__previewSTL = function(jobId, container) {
+  const w = container.clientWidth || 740;
+  const h = 300;
+  container.classList.add('preview-container');
+
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x222222);
+
+  const camera = new THREE.PerspectiveCamera(45, w / h, 0.1, 1000);
+  const renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setSize(w, h);
+  renderer.setPixelRatio(window.devicePixelRatio);
+  container.appendChild(renderer.domElement);
+
+  scene.add(new THREE.AmbientLight(0x404040, 2));
+  const d1 = new THREE.DirectionalLight(0xffffff, 1.5);
+  d1.position.set(1, 1, 1);
+  scene.add(d1);
+  const d2 = new THREE.DirectionalLight(0xffffff, 0.5);
+  d2.position.set(-1, -1, 0.5);
+  scene.add(d2);
+
+  const controls = new OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = true;
+  controls.dampingFactor = 0.1;
+
+  const loader = new STLLoader();
+  loader.load('/download/' + jobId, (geometry) => {
+    const material = new THREE.MeshPhongMaterial({
+      color: 0x5b8def, specular: 0x222222, shininess: 60
+    });
+    const mesh = new THREE.Mesh(geometry, material);
+    geometry.computeBoundingBox();
+    const box = geometry.boundingBox;
+    const center = new THREE.Vector3();
+    box.getCenter(center);
+    mesh.position.sub(center);
+    const size = new THREE.Vector3();
+    box.getSize(size);
+    const maxDim = Math.max(size.x, size.y, size.z);
+    camera.position.set(0, -maxDim * 1.2, maxDim * 1.0);
+    controls.target.set(0, 0, 0);
+    controls.update();
+    scene.add(mesh);
+  });
+
+  function animate() {
+    requestAnimationFrame(animate);
+    controls.update();
+    renderer.render(scene, camera);
+  }
+  animate();
+
+  new ResizeObserver(() => {
+    const nw = container.clientWidth;
+    camera.aspect = nw / h;
+    camera.updateProjectionMatrix();
+    renderer.setSize(nw, h);
+  }).observe(container);
+};
 </script>
 </body>
 </html>"""
