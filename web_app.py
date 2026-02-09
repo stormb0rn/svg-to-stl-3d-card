@@ -45,8 +45,7 @@ BRIDGE_RADIUS = 80
 # Supabase config
 SUPABASE_URL = "https://fwytawawmtenhbnwhunc.supabase.co"
 SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZ3eXRhd2F3bXRlbmhibndodW5jIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjIzODA3MjcsImV4cCI6MjA3Nzk1NjcyN30.oJSo5rG7U4HcA0L5lAPechmyKWLLcB0ce0nNmSxnqhA"
-SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_KEY",
-    "REDACTED")
+SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "")
 STL_BUCKET = "stl-files"
 
 # Thread pool for CPU-bound SVG→STL conversion
