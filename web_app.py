@@ -27,6 +27,8 @@ from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from bitmap_to_svg import convert_bitmap_to_svg
+
 # === Config ===
 UPLOAD_DIR = Path(__file__).parent / "uploads"
 OUTPUT_DIR = Path(__file__).parent / "outputs"
@@ -216,8 +218,23 @@ def convert_svg_to_stl(job_id: str, svg_path: str, stl_path: str,
         paths, attrs = svgpathtools.svg2paths(svg_path)
         tree = ET.parse(svg_path)
         root = tree.getroot()
-        svg_w = float(root.get('width', 800))
-        svg_h = float(root.get('height', 800))
+        def parse_svg_dim(val, default=800):
+            """Strip unit suffixes (pt, px, mm, etc) before converting to float."""
+            if val is None:
+                return float(default)
+            import re
+            m = re.match(r'([0-9.eE+-]+)', val.strip())
+            return float(m.group(1)) if m else float(default)
+
+        # Prefer viewBox for dimensions (handles width="100%" etc.)
+        viewbox = root.get('viewBox')
+        if viewbox:
+            vb_parts = viewbox.replace(',', ' ').split()
+            svg_w = float(vb_parts[2])
+            svg_h = float(vb_parts[3])
+        else:
+            svg_w = parse_svg_dim(root.get('width'))
+            svg_h = parse_svg_dim(root.get('height'))
 
         jobs[job_id]["progress"] = 20
 
@@ -229,7 +246,7 @@ def convert_svg_to_stl(job_id: str, svg_path: str, stl_path: str,
 
         for i, (path, attr) in enumerate(zip(paths, attrs)):
             fill = attr.get('fill', None)
-            if fill == 'white' and not bg_done:
+            if fill and fill.strip().lower() in ('#ffffff', '#fff', 'white') and not bg_done:
                 polys = svg_path_to_polygons(path)
                 if polys and polys[0].area > svg_w * svg_h * 0.8:
                     bg_done = True
@@ -247,12 +264,16 @@ def convert_svg_to_stl(job_id: str, svg_path: str, stl_path: str,
                 all_content = all_content.union(pu)
             except Exception:
                 pass
-            if fill is None:
+            fill_lower = fill.strip().lower() if fill else None
+            is_black = fill_lower in ('#000000', '#000', 'black') if fill_lower else False
+            is_white = fill_lower in ('#ffffff', '#fff', 'white') if fill_lower else False
+
+            if fill is None or is_black:
                 try:
                     visible_lines = visible_lines.union(pu)
                 except Exception:
                     pass
-            elif fill == 'white':
+            elif is_white:
                 try:
                     visible_lines = visible_lines.difference(pu)
                 except Exception:
@@ -360,6 +381,30 @@ def convert_svg_to_stl(job_id: str, svg_path: str, stl_path: str,
         jobs[job_id]["progress"] = 0
 
 
+BITMAP_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.webp'}
+
+
+def convert_bitmap_to_stl(job_id: str, image_path: str, stl_path: str,
+                          target_width=TARGET_WIDTH_MM, base_thick=BASE_THICKNESS_MM, total_h=TOTAL_HEIGHT_MM):
+    """Bitmap → SVG → STL pipeline. Runs in worker thread."""
+    try:
+        jobs[job_id]["status"] = "preprocessing"
+        jobs[job_id]["progress"] = 5
+
+        # Generate temp SVG from bitmap
+        svg_path = image_path.rsplit('.', 1)[0] + '_traced.svg'
+        convert_bitmap_to_svg(image_path, svg_path)
+
+        jobs[job_id]["progress"] = 15
+
+        # Hand off to existing SVG→STL pipeline
+        convert_svg_to_stl(job_id, svg_path, stl_path, target_width, base_thick, total_h)
+    except Exception as e:
+        jobs[job_id]["status"] = "error"
+        jobs[job_id]["error"] = str(e)
+        jobs[job_id]["progress"] = 0
+
+
 # ──────────────────────────────────────────────
 #  API Endpoints
 # ──────────────────────────────────────────────
@@ -371,21 +416,25 @@ async def upload_svg(
     base: float = Form(default=BASE_THICKNESS_MM),
     lines: float = Form(default=LINE_HEIGHT_MM),
 ):
-    """Upload one or more SVG files. Returns job IDs for tracking."""
+    """Upload SVG or bitmap files. Returns job IDs for tracking."""
     total_h = base + lines
     results = []
     for f in files:
-        if not f.filename.lower().endswith('.svg'):
-            results.append({"filename": f.filename, "error": "Not an SVG file"})
+        ext = Path(f.filename).suffix.lower()
+        is_svg = ext == '.svg'
+        is_bitmap = ext in BITMAP_EXTENSIONS
+
+        if not is_svg and not is_bitmap:
+            results.append({"filename": f.filename, "error": "Unsupported file type"})
             continue
 
         job_id = str(uuid.uuid4())[:8]
         basename = Path(f.filename).stem
-        svg_path = str(UPLOAD_DIR / f"{job_id}_{f.filename}")
+        upload_path = str(UPLOAD_DIR / f"{job_id}_{f.filename}")
         stl_path = str(OUTPUT_DIR / f"{job_id}_{basename}.stl")
 
         content = await f.read()
-        with open(svg_path, "wb") as fp:
+        with open(upload_path, "wb") as fp:
             fp.write(content)
 
         jobs[job_id] = {
@@ -397,7 +446,10 @@ async def upload_svg(
             "started": time.time(),
         }
 
-        executor.submit(convert_svg_to_stl, job_id, svg_path, stl_path, width, base, total_h)
+        if is_bitmap:
+            executor.submit(convert_bitmap_to_stl, job_id, upload_path, stl_path, width, base, total_h)
+        else:
+            executor.submit(convert_svg_to_stl, job_id, upload_path, stl_path, width, base, total_h)
         results.append({"filename": f.filename, "job_id": job_id})
 
     return JSONResponse(results)
@@ -930,9 +982,9 @@ HTML_PAGE = """<!DOCTYPE html>
         <div class="drop-icon">
           <svg viewBox="0 0 24 24"><path d="M9 16h6v-6h4l-7-7-7 7h4zm-4 2h14v2H5z"/></svg>
         </div>
-        <div class="drop-text">Drop SVG files here or click to upload</div>
-        <div class="drop-hint">Supports batch processing with parallel conversion</div>
-        <input type="file" id="fileInput" accept=".svg" multiple hidden>
+        <div class="drop-text">Drop SVG or image files here or click to upload</div>
+        <div class="drop-hint">SVG, PNG, JPG, BMP, TIFF, WebP — batch processing supported</div>
+        <input type="file" id="fileInput" accept=".svg,.png,.jpg,.jpeg,.bmp,.tiff,.webp" multiple hidden>
       </div>
 
       <div class="job-list" id="jobList"></div>
@@ -990,16 +1042,20 @@ dropZone.addEventListener('drop', e => {
 fileInput.addEventListener('change', () => { handleFiles(fileInput.files); fileInput.value = ''; });
 
 async function handleFiles(files) {
-  const svgFiles = [...files].filter(f => f.name.toLowerCase().endsWith('.svg'));
-  if (!svgFiles.length) return;
+  const allowed = ['.svg','.png','.jpg','.jpeg','.bmp','.tiff','.webp'];
+  const validFiles = [...files].filter(f => {
+    const ext = '.' + f.name.split('.').pop().toLowerCase();
+    return allowed.includes(ext);
+  });
+  if (!validFiles.length) return;
 
   const formData = new FormData();
-  svgFiles.forEach(f => formData.append('files', f));
+  validFiles.forEach(f => formData.append('files', f));
   formData.append('width', document.getElementById('cfg-width').value);
   formData.append('base', document.getElementById('cfg-base').value);
   formData.append('lines', document.getElementById('cfg-lines').value);
 
-  svgFiles.forEach(f => {
+  validFiles.forEach(f => {
     jobList.prepend(createJobCard(null, f.name));
   });
 
@@ -1008,7 +1064,7 @@ async function handleFiles(files) {
     const results = await resp.json();
     const placeholders = jobList.querySelectorAll('.job-card[data-job="pending"]');
     results.forEach((r, i) => {
-      const card = placeholders[svgFiles.length - 1 - i];
+      const card = placeholders[validFiles.length - 1 - i];
       if (!card) return;
       if (r.error) {
         card.dataset.job = 'error';
@@ -1042,11 +1098,12 @@ function createJobCard(jobId, filename) {
 
 function updateCardStatus(card, status, error) {
   const badge = card.querySelector('.job-badge');
-  badge.className = 'job-badge ' + status;
+  badge.className = 'job-badge ' + (status === 'preprocessing' ? 'processing' : status);
   badge.textContent = status === 'done' ? 'Complete' :
                       status === 'error' ? 'Failed' :
+                      status === 'preprocessing' ? 'Tracing bitmap...' :
                       status === 'processing' ? 'Processing' : 'Queued';
-  card.className = 'job-card ' + status;
+  card.className = 'job-card ' + (status === 'preprocessing' ? 'processing' : status);
   if (error) {
     const errEl = card.querySelector('.job-error-msg');
     errEl.style.display = 'block';

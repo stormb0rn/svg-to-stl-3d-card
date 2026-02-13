@@ -195,8 +195,17 @@ def main():
 
     tree = ET.parse(input_svg)
     root = tree.getroot()
-    svg_width = float(root.get('width', 800))
-    svg_height = float(root.get('height', 800))
+    # Parse dimensions from viewBox first, fallback to width/height attributes
+    viewbox = root.get('viewBox')
+    if viewbox:
+        parts = viewbox.replace(',', ' ').split()
+        svg_width = float(parts[2])
+        svg_height = float(parts[3])
+    else:
+        w_str = root.get('width', '800')
+        h_str = root.get('height', '800')
+        svg_width = float(w_str.replace('px', '').replace('%', '') if not w_str.endswith('%') else 800)
+        svg_height = float(h_str.replace('px', '').replace('%', '') if not h_str.endswith('%') else 800)
     print(f"  SVG canvas: {svg_width} x {svg_height}")
 
     # Step 2: Process paths in SVG paint order
@@ -232,13 +241,18 @@ def main():
         except Exception:
             pass
 
-        if fill is None:
-            # No fill attr = default black in SVG = line work
+        # Normalize fill color for comparison
+        fill_lower = fill.strip().lower() if fill else None
+        is_black = fill_lower in ('#000000', '#000', 'black') if fill_lower else False
+        is_white = fill_lower in ('#ffffff', '#fff', 'white') if fill_lower else False
+
+        if fill is None or is_black:
+            # No fill attr (default black) or explicit black = line work
             try:
                 visible_lines = visible_lines.union(poly_union)
             except Exception:
                 pass
-        elif fill == 'white':
+        elif is_white:
             # White fills cover black underneath
             try:
                 visible_lines = visible_lines.difference(poly_union)
