@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SVG Relief Card</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <main class="app-shell">
+    <section class="tool-panel">
+      <div class="brand-row">
+        <div class="mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24"><path d="M4 8.5 12 4l8 4.5v7L12 20l-8-4.5z"/><path d="M8 10.5h8M8 13.5h8"/></svg>
+        </div>
+        <div>
+          <h1>SVG Relief Card</h1>
+          <p>浏览器端多线程生成 3D 打印卡片 STL</p>
+        </div>
+      </div>
+
+      <form id="form" class="controls">
+        <label class="file-drop" id="dropZone">
+          <input id="svgFile" type="file" accept=".svg,image/svg+xml" required>
+          <span class="file-title">选择 SVG 文件</span>
+          <span id="fileName" class="file-name">未选择文件</span>
+        </label>
+
+        <div class="control-grid">
+          <label>
+            <span>长边尺寸 mm</span>
+            <input name="longMm" type="number" min="20" max="240" step="1" value="120">
+          </label>
+          <label>
+            <span>栅格宽度 px</span>
+            <input name="rasterWidth" type="number" min="300" max="1400" step="20" value="720">
+          </label>
+          <label>
+            <span>底板 mm</span>
+            <input name="baseThickness" type="number" min="0.4" max="6" step="0.1" value="1.5">
+          </label>
+          <label>
+            <span>凸起 mm</span>
+            <input name="featureHeight" type="number" min="0.2" max="6" step="0.1" value="2.0">
+          </label>
+          <label>
+            <span>线条阈值</span>
+            <input name="lineThreshold" type="number" min="20" max="250" step="1" value="225">
+          </label>
+          <label>
+            <span>凸起宽度 px</span>
+            <input name="grooveWidthPx" type="number" min="1" max="8" step="0.5" value="2">
+          </label>
+          <label>
+            <span>保留底部块</span>
+            <input name="maskKeepComponents" type="number" min="1" max="8" step="1" value="3">
+          </label>
+          <label>
+            <span>连接宽度 px</span>
+            <input name="bridgeWidthPx" type="number" min="0" max="80" step="1" value="28">
+          </label>
+          <label>
+            <span>线程数</span>
+            <input name="workerCount" type="number" min="1" max="12" step="1" value="4">
+          </label>
+        </div>
+
+        <button id="runButton" type="submit">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+          <span>生成 STL</span>
+        </button>
+      </form>
+    </section>
+
+    <section class="workspace">
+      <div class="status-bar">
+        <div>
+          <div id="statusTitle" class="status-title">等待 SVG</div>
+          <div id="statusText" class="status-text">上传后会在本机浏览器内处理，不经过远端队列。</div>
+        </div>
+        <a id="downloadLink" class="download disabled" href="#" download="card.stl">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11m0 0 4-4m-4 4-4-4"/><path d="M5 20h14"/></svg>
+          <span>下载 STL</span>
+        </a>
+      </div>
+
+      <div class="progress-track">
+        <div id="progressBar"></div>
+      </div>
+
+      <div class="preview-grid">
+        <figure>
+          <figcaption>底板掩膜</figcaption>
+          <canvas id="maskCanvas"></canvas>
+        </figure>
+        <figure>
+          <figcaption>凸起线条</figcaption>
+          <canvas id="grooveCanvas"></canvas>
+        </figure>
+        <figure>
+          <figcaption>线稿输入</figcaption>
+          <canvas id="lineCanvas"></canvas>
+        </figure>
+      </div>
+
+      <pre id="log" class="log"></pre>
+    </section>
+  </main>
+
+  <script src="/app.js" type="module"></script>
+</body>
+</html>
