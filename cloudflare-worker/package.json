@@ -1,0 +1,15 @@
+{
+  "name": "svg-relief-card-worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "dry-run": "wrangler deploy --dry-run --outdir dist-dry-run",
+    "check": "node --check src/index.js && node --check public/app.js && wrangler deploy --dry-run --outdir dist-dry-run"
+  },
+  "devDependencies": {
+    "wrangler": "^4.112.0"
+  }
+}

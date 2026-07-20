@@ -1,6 +1,6 @@
 # SVG to STL 3D Card
 
-This repo contains two deployment targets for generating 3D-printable STL relief cards from SVG artwork.
+This repo contains three deployment targets for generating 3D-printable STL relief cards from SVG artwork.
 
 ## Local / Render FastAPI app
 
@@ -33,3 +33,29 @@ vercel deploy vercel-app -y
 
 For GitHub import on Vercel, set the project Root Directory to `vercel-app`.
 
+## Cloudflare Worker app
+
+The Cloudflare Worker version lives in `cloudflare-worker/`.
+
+It hosts the upload page with Workers Static Assets and sends `/api/*` requests through the Worker. The browser renders the SVG to RGBA pixels, then the Worker cleans the mask, merges lower/bottom components into the plate, raises the linework, and returns a binary STL.
+
+Default print dimensions:
+
+- Base plate: `1.5 mm`
+- Raised line height: `2.0 mm` above the base
+- Long edge: `120 mm`
+
+Local preview:
+
+```bash
+cd cloudflare-worker
+npm install
+npm run dev
+```
+
+Deploy:
+
+```bash
+cd cloudflare-worker
+npm run deploy
+```
