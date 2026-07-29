@@ -36,6 +36,8 @@ npm run deploy
 
 If this is the first deploy, Wrangler will prompt for Cloudflare auth. The Worker uses Workers Static Assets for `public/` and routes `/api/*` through the Worker script.
 
+Production URL: <https://card.jiajun.site>
+
 ## Notes
 
 - This target outputs STL only. 3MF/OpenSCAD output remains in the Python app because Workers cannot run the required native binaries.

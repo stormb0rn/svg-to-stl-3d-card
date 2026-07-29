@@ -59,3 +59,5 @@ Deploy:
 cd cloudflare-worker
 npm run deploy
 ```
+
+Production URL: <https://card.jiajun.site>
